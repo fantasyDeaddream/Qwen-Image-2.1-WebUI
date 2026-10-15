@@ -1,6 +1,6 @@
 # Qwen-Image-2.1 本地部署 · 使用说明
 
-这个 EXE 里打包了运行所需的**全部脚本与代码**。你只需要分发这一个文件。
+这个 EXE 里打包了运行所需的**全部脚本与代码**，所以你只需要下载这一个文件。
 
 ---
 
@@ -80,7 +80,7 @@ API Key 用 **Windows DPAPI 加密**存储（只有当前 Windows 用户在本�
 ## 目录会变成什么样
 
 ```
-QwenImageLauncher.exe     ← 你分发的唯一文件
+QwenImageLauncher.exe     ← 你下载的那一个文件
 shared\ setup\ mixed\ ... ← 首次运行自动展开的脚本（升级时自动刷新）
 .venv\ ComfyUI\ models_cache\ outputs\   ← 安装环境/模型后出现，升级时保留
 launcher_state.json       ← 记住的路径与加密后的 API Key
