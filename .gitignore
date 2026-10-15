@@ -1,0 +1,38 @@
+# --- runtime / install artifacts (created by the installer, never committed) ---
+.venv/
+venv/
+ComfyUI/
+gguf/ComfyUI/
+models_cache/
+outputs/
+tools/
+
+# --- launcher build output ---
+launcher/dist/
+launcher/build/
+*.spec.bak
+
+# --- state written at runtime ---
+.qwen_env.json
+launcher_state.json
+selftest_image.json
+*.pid
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# --- editor / os ---
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+*.swp
+
+# --- large binaries: shipped as GitHub Releases, not in the tree ---
+*.exe
+*.rar
+*.7z
+!launcher/build_exe.bat

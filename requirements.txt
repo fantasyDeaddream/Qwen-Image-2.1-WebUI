@@ -1,0 +1,6 @@
+# Qwen-Image-2.1 runtime
+transformers>=5.17
+accelerate>=1.10
+pillow>=11.0
+gradio>=5.44
+huggingface_hub>=0.34

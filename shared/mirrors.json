@@ -1,0 +1,66 @@
+{
+  "_comment": "Mirror endpoints chosen by measurement (_bench/mirror_speedtest.ps1, 2026-10-12). Do not edit by hand without re-measuring; run _bench/mirror_speedtest.ps1 and update the observed numbers.",
+  "_measurements": {
+    "pip_numpy_wheel_sustained": {
+      "pypi.org": "0.125 MB/s",
+      "mirrors.aliyun.com": "0.261 MB/s",
+      "pypi.tuna.tsinghua.edu.cn": "3.500 MB/s",
+      "mirrors.cloud.tencent.com": "4.030 MB/s",
+      "mirrors.ustc.edu.cn": "3.968 MB/s"
+    },
+    "model_hub_11MB_file": {
+      "huggingface.co": "UNREACHABLE (http=000, 21 s timeout)",
+      "hf-mirror.com": "UNREACHABLE (http=000, 25 s timeout)",
+      "modelscope.cn": "11.53 MB/s"
+    },
+    "git_smart_http_handshake": {
+      "github.com": "15.0 s",
+      "gitee.com/mirrors/ComfyUI": "0.79 s",
+      "ghfast.top proxy": "4.77 s"
+    },
+    "python_runtime_25MB": {
+      "python.org": "0.357 MB/s",
+      "mirrors.huaweicloud.com": "10.284 MB/s",
+      "mirrors.aliyun.com/python-release": "0.263 MB/s"
+    },
+    "pytorch_cu130_index_page": {
+      "download.pytorch.org": "0.039 MB/s",
+      "mirrors.aliyun.com/pytorch-wheels": "0.314 MB/s"
+    },
+    "comfyui_shallow_clone": {
+      "gitee.com/mirrors/ComfyUI": "3.3 s / 47.6 MB -- BUT STALE, no Qwen-Image-2.1 support",
+      "github.com/Comfy-Org/ComfyUI": "works, slow handshake (15 s)",
+      "https://gh-proxy.com/https://github.com/Comfy-Org/ComfyUI.git": "6.5 s, HEAD e8665ca, has comfy/ldm/qwen_image21 -- VERIFIED GOOD fallback",
+      "https://ghfast.top/https://github.com/Comfy-Org/ComfyUI.git": "556 s -- do not use"
+    }
+  },
+
+  "pip_primary": "https://mirrors.cloud.tencent.com/pypi/simple",
+  "pip_fallback": "https://mirrors.ustc.edu.cn/pypi/simple",
+  "pip_fallback2": "https://pypi.tuna.tsinghua.edu.cn/simple",
+  "pip_last_resort": "https://pypi.org/simple",
+  "pip_host": "mirrors.cloud.tencent.com",
+
+  "hf_endpoint": "https://www.modelscope.cn",
+  "hf_fallback": "https://hf-mirror.com",
+  "models_source": "modelscope",
+
+  "pytorch_index": "https://mirrors.aliyun.com/pytorch-wheels/cu130",
+  "pytorch_fallback": "https://download.pytorch.org/whl/cu130",
+
+  "git_for_windows": "https://registry.npmmirror.com/-/binary/git-for-windows",
+  "python_release": "https://mirrors.huaweicloud.com/python",
+  "python_fallback": "https://www.python.org/ftp/python",
+  "python_version": "3.11.9",
+
+  "comfyui_repo": "https://github.com/Comfy-Org/ComfyUI.git",
+  "comfyui_fallback": "https://gh-proxy.com/https://github.com/Comfy-Org/ComfyUI.git",
+  "comfyui_pinned_commit": "c194dd00cd42aa18d9dbf27d977bf6b85d9ea565",
+  "_comfyui_warning": "DO NOT use https://gitee.com/mirrors/ComfyUI.git. It clones in 3.3 s but is a stale snapshot: HEAD 0d901722 lacks comfy/ldm/qwen_image21 and TextEncodeQwenImage21 entirely, so Qwen-Image-2.1 cannot run on it. Any clone must pass the post-clone capability check in setup_comfyui.bat.",
+
+  "modelscope_repos": {
+    "Qwen/Qwen-Image-2.1": "https://www.modelscope.cn/models/Qwen/Qwen-Image-2.1",
+    "Qwen/Qwen-Image-2.1-Turbo": "https://www.modelscope.cn/models/Qwen/Qwen-Image-2.1-Turbo",
+    "Comfy-Org/Qwen-Image-2.1": "https://www.modelscope.cn/models/Comfy-Org/Qwen-Image-2.1"
+  }
+}
