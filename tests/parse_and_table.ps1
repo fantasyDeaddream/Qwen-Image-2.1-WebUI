@@ -1,5 +1,5 @@
 ﻿$ErrorActionPreference = 'Continue'
-$root = Split-Path -Parent $PSScriptRoot
+$root = (Split-Path -Parent $PSScriptRoot)
 $files = @(
     (Join-Path $root 'shared\QwenEnv.ps1'),
     (Join-Path $root 'shared\qwen_launch.ps1'),

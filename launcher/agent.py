@@ -187,7 +187,8 @@ def list_models(provider_key: str, api_key: str) -> list:
                         ids.append(item.get("id") or item.get("name") or item.get("model"))
                 break
     elif isinstance(data, list):
-        ids = [x if isinstance(x, str) else (x.get("id") or x.get("name")) for x in data]
+        ids = [x if isinstance(x, str) else (x.get("id") or x.get("name") or x.get("model"))
+               for x in data]
     return sorted({i for i in ids if isinstance(i, str) and i.strip()})
 
 
@@ -416,32 +417,61 @@ class Plan:
                 p.warnings.append(f"{key} 不是数字，用 {default}")
                 return default
 
-        # size: snap to /32, then shrink proportionally until under the cap
-        def snap(v):
-            v = max(256, min(4096, int(v)))
-            return max(256, (v // 32) * 32)
+        # Models occasionally answer booleans as strings ("false" is the
+        # dangerous one: plain bool("false") is True).
+        def _flag(key, default=False):
+            v = data.get(key, default)
+            if isinstance(v, bool):
+                return v
+            if isinstance(v, (int, float)):
+                return bool(v)
+            s = str(v).strip().lower()
+            if s in ("1", "true", "yes", "y", "on", "是"):
+                return True
+            if s in ("0", "false", "no", "n", "off", "否", ""):
+                return False
+            p.warnings.append(f"{key} 不是布尔值（{v!r}），按 {default} 处理")
+            return default
 
-        p.width = snap(_int("width", 1024))
-        p.height = snap(_int("height", 1024))
+        # size: clamp, snap to /32, then shrink proportionally until under the cap
+        def _axis(key, default=1024):
+            raw = _int(key, default)
+            value = max(256, min(4096, raw))
+            if value != raw:
+                p.warnings.append(f"{key}={raw} 超出 256–4096，已夹到 {value}")
+            snapped = (value // 32) * 32
+            if snapped != value:
+                p.warnings.append(f"{key}={value} 不是 32 的倍数，已对齐到 {snapped}")
+            return snapped
+
+        p.width = _axis("width")
+        p.height = _axis("height")
         if p.width * p.height > max_pixels:
             scale = (max_pixels / (p.width * p.height)) ** 0.5
             p.width = max(256, int(p.width * scale) // 32 * 32)
             p.height = max(256, int(p.height * scale) // 32 * 32)
             p.warnings.append(f"尺寸超上限，已缩到 {p.width}x{p.height}")
 
-        p.transparent = bool(data.get("transparent", False))
+        p.transparent = _flag("transparent", False)
         p.latent_mode = "reference" if str(data.get("latent_mode", "custom")).lower() == "reference" else "custom"
-        p.count = max(1, min(8, _int("count", 1)))
+
+        raw_count = _int("count", 1)
+        p.count = max(1, min(8, raw_count))
+        if p.count != raw_count:
+            p.warnings.append(f"张数 {raw_count} 超出 1–8，已夹到 {p.count}")
+
         p.edit_image_index = _int("edit_image_index", -1)
         refs = data.get("reference_indices") or []
         if isinstance(refs, (int, str)):
             refs = [refs]
-        p.reference_indices = []
+        p.reference_indices, not_int = [], []
         for r in refs:
             try:
                 p.reference_indices.append(int(r))
             except (TypeError, ValueError):
-                continue
+                not_int.append(r)
+        if not_int:
+            p.warnings.append(f"参考图索引 {not_int} 不是整数，已忽略")
 
         # reconcile with how many pictures actually exist
         if n_images == 0:
@@ -451,10 +481,17 @@ class Plan:
             p.latent_mode = "custom"
         else:
             if p.mode == "edit" and not (0 <= p.edit_image_index < n_images):
-                p.warnings.append("edit_image_index 越界，改用第 0 张")
+                p.warnings.append(f"edit_image_index={p.edit_image_index} 越界"
+                                  f"（共 {n_images} 张），改用第 0 张")
                 p.edit_image_index = 0
-            p.reference_indices = [i for i in p.reference_indices if 0 <= i < n_images]
+            kept = [i for i in p.reference_indices if 0 <= i < n_images]
+            dropped = [i for i in p.reference_indices if not (0 <= i < n_images)]
+            if dropped:
+                p.warnings.append(f"参考图索引 {dropped} 越界"
+                                  f"（共 {n_images} 张），已忽略")
+            p.reference_indices = kept
             if p.mode == "reference" and not p.reference_indices:
+                p.warnings.append("reference 模式没有有效参考图索引，改用第 0 张")
                 p.reference_indices = [0]
         if not p.prompt:
             p.warnings.append("agent 未给出提示词")
@@ -468,13 +505,14 @@ class Plan:
         """
         if not images:
             return []
+        n = len(images)
         if self.mode == "edit":
-            first = [images[self.edit_image_index]]
-            rest = [im for i, im in enumerate(images) if i != self.edit_image_index]
-            return first + rest
+            idx = self.edit_image_index if 0 <= self.edit_image_index < n else 0
+            return [images[idx]] + [im for i, im in enumerate(images) if i != idx]
         if self.mode == "reference":
-            picked = [images[i] for i in self.reference_indices]
-            others = [im for i, im in enumerate(images) if i not in self.reference_indices]
+            picked_idx = [i for i in self.reference_indices if 0 <= i < n] or [0]
+            picked = [images[i] for i in picked_idx]
+            others = [im for i, im in enumerate(images) if i not in picked_idx]
             return picked + others
         return list(images)
 

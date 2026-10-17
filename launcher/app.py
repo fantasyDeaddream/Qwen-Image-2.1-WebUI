@@ -183,6 +183,8 @@ class Launcher(QMainWindow):
         self.runner: Runner | None = None
         self.poller: HealthPoller | None = None
         self.pending_goto = None
+        self._manifests: dict = {}
+        self._manifest_runner = None
         self.mem_strategy = ""
         self.strategy_proc = None
         self.current_strategy: str = ""
@@ -445,7 +447,10 @@ class Launcher(QMainWindow):
         self.render_paths()
         self.render_install()
         self.render_run()
+        # shard counts change after every install or uninstall
+        QTimer.singleShot(300, self.refresh_manifests)
         self.remember_paths()
+        QTimer.singleShot(1200, self.refresh_manifests)
         if self.pending_goto is not None and hasattr(self, "agent_panel"):
             self.console.log("跳转到 STEP 4：启动与出图。")
             self.goto_step(self.pending_goto)
@@ -633,6 +638,18 @@ class Launcher(QMainWindow):
             "推荐项已按你的显卡/内存/磁盘自动标记。安装过程会实时输出到下方日志。"
         ))
 
+        tools = QHBoxLayout()
+        self.btn_refresh_shards = QPushButton("刷新分片状态")
+        self.btn_refresh_shards.clicked.connect(lambda: self.refresh_manifests())
+        tools.addWidget(self.btn_refresh_shards)
+        self.btn_cancel_install = QPushButton("中断当前安装")
+        self.btn_cancel_install.setObjectName("Danger")
+        self.btn_cancel_install.setEnabled(False)
+        self.btn_cancel_install.clicked.connect(self.do_cancel_install)
+        tools.addWidget(self.btn_cancel_install)
+        tools.addStretch(1)
+        lay.addLayout(tools)
+
         self.env_card = card()
         ev = QVBoxLayout(self.env_card)
         ev.setContentsMargins(14, 12, 14, 12)
@@ -717,8 +734,114 @@ class Launcher(QMainWindow):
             b.setEnabled(not c.ready)
             b.clicked.connect(lambda _=False, ch=c: self.run_install(ch.key))
             h.addWidget(b)
+
+            kit = core.kit_of(c.key)
+            man = self._manifests.get(kit) or {}
+            b_rm = QPushButton("卸载")
+            b_rm.setObjectName("Danger")
+            # enabled whenever anything of this kit is on disk, so a half
+            # finished download can be cleaned up too
+            has_any = bool(man.get("present_count") or man.get("damaged_count")
+                           or man.get("missing_count") is not None and man.get("manifest_ok"))
+            b_rm.setEnabled(bool(man.get("manifest_ok")) and has_any)
+            b_rm.clicked.connect(lambda _=False, ch=c: self.do_uninstall_kit(ch.key))
+            h.addWidget(b_rm)
+
+            if man.get("manifest_ok"):
+                shard = QLabel(
+                    f"分片 {man.get('present_count', 0)} 完整 / "
+                    f"{man.get('missing_count', 0)} 缺失 / "
+                    f"{man.get('damaged_count', 0)} 损坏"
+                    f"（共 {man.get('file_count', 0)}）"
+                )
+                broken = (man.get("missing_count") or 0) + (man.get("damaged_count") or 0)
+                shard.setStyleSheet(f"color: {AMBER if broken else GREEN};")
+                left.addWidget(shard)
+            elif man:
+                lab = QLabel("分片清单不可用（离线或仓库不可达）")
+                lab.setStyleSheet(f"color: {TEXT_DIM};")
+                left.addWidget(lab)
+
             self.model_box.addWidget(box)
         self.model_box.addStretch(1)
+
+    def refresh_manifests(self):
+        """Ask the repository, per kit, which shards are actually here."""
+        if self._manifest_runner and self._manifest_runner.isRunning():
+            return
+        self.btn_refresh_shards.setEnabled(False)
+        root = self.install_root or self.edit_root.text().strip() or None
+        manual = self.manual_overrides()
+
+        def job(emit):
+            for kit in ("native", "mixed", "turbo"):
+                man = core.model_manifest(kit, install_root=root, manual=manual)
+                self._manifests[kit] = man
+                label = core.KIT_LABEL.get(kit, kit)
+                if man.get("manifest_ok"):
+                    emit(f"分片 {label}：完整 {man.get('present_count', 0)} / "
+                         f"缺失 {man.get('missing_count', 0)} / "
+                         f"损坏 {man.get('damaged_count', 0)}"
+                         f"（共 {man.get('file_count', 0)}，"
+                         f"{man.get('total_bytes', 0) / 2**30:.1f} GiB）")
+                else:
+                    emit(f"分片 {label}：清单不可用")
+            return 0
+
+        self._manifest_runner = Runner(job)
+        self._manifest_runner.line.connect(self.console.log)
+        self._manifest_runner.done.connect(lambda _rc: (
+            self.btn_refresh_shards.setEnabled(True), self.render_install()))
+        self._manifest_runner.start()
+
+    def do_cancel_install(self):
+        if not core.install_running():
+            QMessageBox.information(self, "没有正在运行的安装", "当前没有可中断的安装任务。")
+            return
+        if QMessageBox.question(
+                self, "中断安装",
+                "确定中断当前安装？\n\n已下载的部分会保留，下次安装只补缺失的分片。",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        if core.cancel_install():
+            self.console.log("[中断] 已请求终止安装进程树")
+        else:
+            self.console.log("[中断] 没有找到可终止的进程")
+
+    def do_uninstall_kit(self, choice_key: str):
+        kit = core.kit_of(choice_key)
+        label = core.KIT_LABEL.get(kit, kit)
+        man = self._manifests.get(kit) or {}
+        where = man.get("local_dir") or "（位置未知）"
+        n_present = man.get("present_count", 0)
+        n_broken = (man.get("missing_count") or 0) + (man.get("damaged_count") or 0)
+        if QMessageBox.question(
+                self, f"卸载 {label}",
+                f"将删除 {label} 的全部文件。\n\n位置：{where}\n"
+                f"完整分片 {n_present} 个，残缺/缺失 {n_broken} 个\n\n"
+                "此项不可撤销，继续？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        root = self.install_root or self.edit_root.text().strip() or None
+        manual = self.manual_overrides()
+        self.busy(True, f"卸载 {label}")
+        self.console.log("")
+        self.console.log(f"=== 卸载 {label} ===")
+
+        def job(emit):
+            rc = core.uninstall_kit(kit, install_root=root, manual=manual, on_line=emit)
+            emit("正在重新检测…")
+            try:
+                self.state = core.probe(install_root=root, on_line=None, manual=manual)
+                self.choices = core.build_choices(self.hw, self.state)
+            except Exception as exc:  # noqa: BLE001
+                emit(f"[WARN] 重新检测失败：{exc}")
+            return rc
+
+        self.runner = Runner(job)
+        self.runner.line.connect(self.console.log)
+        self.runner.done.connect(self.after_install)
+        self.runner.start()
 
     def run_install(self, what: str):
         if self.runner and self.runner.isRunning():
@@ -756,6 +879,7 @@ class Launcher(QMainWindow):
         self.console.log("")
         self.console.log(f"=== {title} ===")
         self.busy(True, title)
+        self.btn_cancel_install.setEnabled(True)
 
         def job(emit):
             rc = fn(emit)
@@ -774,6 +898,7 @@ class Launcher(QMainWindow):
         self.runner.start()
 
     def after_install(self, rc: int):
+        self.btn_cancel_install.setEnabled(False)
         self.busy(False, "安装结束" if rc == 0 else f"安装失败 (exit {rc})")
         self.console.log(f"=== 结束，退出码 {rc} ===")
         self.render_detect()

@@ -103,6 +103,9 @@ $script:QwenArtifactRules = @(
     @{ Match = 'turbo.*q4_k_m|q4_k_m.*gguf';     Bytes = 4189346592 },  # 3.90 GiB GGUF
     @{ Match = 'turbo.*int8|turbo_int8';         Bytes = 7259000000 },  # 6.76 GiB
     @{ Match = 'qwen3vl.*int8';                  Bytes = 9353000000 },  # 8.71 GiB encoder
+    # Optional encoder alternative (Comfy-Org text_encoders/qwen3vl_8b_w4a8):
+    # 5.879 GiB instead of 8.709 GiB, selected via QWEN_TEXT_ENCODER.
+    @{ Match = 'qwen3vl.*w4a8';                  Bytes = 6312105364 },
     @{ Match = 'vae.*bf16';                      Bytes = 676000000  },  # 0.63 GiB
     @{ Match = 'turbo.*lora';                    Bytes = 913314512   },  # 0.85 GiB LoRA
     @{ Match = 'int8_convrot';                   Bytes = 4198000000 }   # generic int8
@@ -157,7 +160,19 @@ function Test-QwenVenvFull {
 function Test-QwenModelsCache {
     param([string]$Path, [switch]$NeedWeights)
     if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Container)) { return $false }
+
+    # Two layouts are valid. The HuggingFace cache layout is
+    #   models_cache/models--Qwen--Qwen-Image-2.1/snapshots/<rev>/...
+    # while Invoke-ModelsNative writes a plain tree at
+    #   models_cache/Qwen-Image-2.1/{transformer,text_encoder,vae}
+    # Recognising only the first made a finished native install invisible.
+    $plain = Join-Path $Path 'Qwen-Image-2.1'
     $repo = Join-Path $Path 'models--Qwen--Qwen-Image-2.1'
+
+    if (Test-Path -LiteralPath $plain -PathType Container) {
+        if (-not $NeedWeights) { return $true }
+        if ((Test-QwenNativeWeights -Dir $plain).Complete) { return $true }
+    }
     if (-not (Test-Path -LiteralPath $repo -PathType Container)) { return $false }
     if (-not $NeedWeights) { return $true }
     # require at least one snapshot that actually holds transformer weights
@@ -253,7 +268,24 @@ function Resolve-QwenModelTargets {
         $parts = $spec -split '/', 2
         if ($parts.Count -ne 2) { continue }
         $folder, $file = $parts[0], $parts[1]
-        $found = Find-QwenComfyModelFile -StartDir $StartDir -Folder $folder -Pattern $file
+
+        # The ComfyUI folder can be located through an override and live in a
+        # different tree from StartDir. Look inside it first, otherwise a
+        # correctly configured ComfyUI still reports every model as missing.
+        $found = $null
+        if ($ComfyDir) {
+            $direct = Join-Path (Join-Path $ComfyDir 'models') $folder
+            if (Test-Path -LiteralPath $direct -PathType Container) {
+                $hit = Get-ChildItem -LiteralPath $direct -File -ErrorAction SilentlyContinue |
+                       Where-Object { $_.Name -like $file } |
+                       Where-Object { Test-QwenArtifact -Path $_.FullName -Name $_.Name } |
+                       Select-Object -First 1
+                if ($hit) { $found = $hit.FullName }
+            }
+        }
+        if (-not $found) {
+            $found = Find-QwenComfyModelFile -StartDir $StartDir -Folder $folder -Pattern $file
+        }
         if ($found) {
             $present[$spec] = $found
             continue

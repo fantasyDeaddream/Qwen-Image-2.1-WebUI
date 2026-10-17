@@ -98,7 +98,7 @@ where, not in the code that draws the picture.
 | `mixed` | Same W4 weights, placement left to ComfyUI's scheduler | ~7.0 GB | 3.9 GB | more headroom on 12 GB+ |
 | `turbo` | W4 + the Turbo LoRA, 8-step sampling | ~7.0 GB | 4.8 GB | **recommended** — see below |
 | `native` | Full BF16 through `diffusers` | >16 GB | 30.2 GB | highest quality ceiling |
-| `gguf` | Turbo GGUF Q4_K_M in an isolated ComfyUI instance | ~6.9 GB | 3.9 GB | slower; useful when disk is tight |
+| `gguf` | Turbo GGUF Q4_K_M in an isolated ComfyUI instance | ~6.9 GB | 3.9 GB | 2.9× slower **and lower quality** — 4–6 GB fallback only, see `gguf/README.md` |
 
 ### About Turbo
 
@@ -143,13 +143,22 @@ not from the LoRA** — the LoRA is what keeps quality acceptable at that step c
   runtime. Note that ComfyUI disables the prefix cache automatically whenever LoRA patches
   are attached.
 
-### GGUF is much slower per step
+### GGUF is slower per step — and lower quality
 
 Running the same ComfyUI build with both quantizations, W4 executes at **1.20 s/it** and
 GGUF at **3.53 s/it** — about 2.9× slower. This is architectural rather than a version
 problem: the native W4 path dispatches to a fused int8 kernel, whereas the GGUF path
-dequantizes the tensor and then calls `torch.nn.functional.linear`. The GGUF route earns
-its place only when you are short on disk or need its smaller resident footprint.
+dequantizes the tensor and then calls `torch.nn.functional.linear`.
+
+It is not only a speed trade-off. unsloth's published LPIPS for Turbo Q4_K_M is **0.153**
+against **0.037** for the INT8 build — roughly **4× worse** (AlexNet, 8 steps). Q5_K_M (0.074)
+and Q6_K (0.055) close part of the gap but stay behind; only Q8_0 (0.036) matches INT8, at
+which point the file is no longer smaller. GGUF also uses about the same VRAM as the W4 route,
+so it saves neither VRAM nor disk.
+
+Treat `gguf` as a control route and as a fallback for 4–6 GB cards only — not as an option for
+6–8 GB machines, where `mixed-vram` or `turbo` is strictly better. Details in
+[`gguf/README.md`](gguf/README.md).
 
 ---
 
@@ -220,6 +229,7 @@ launcher/          PyQt5 front-end: detection, install, run, AI agent, gallery
   core.py          discovery, process control, secrets, HTTP drawing
   agent.py         provider SDK, capability probing, plan validation
   agent_panel.py   agent UI and the result gallery
+  tests/           offline unit tests for the agent layer (104 checks, no network, no API key)
 shared/            the library every strategy shares
   QwenEnv.ps1      path discovery, environment cache, mirror config
   qwen_comfy.py    graph builder, official samplers, Turbo sigma grid

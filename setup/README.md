@@ -19,6 +19,10 @@ then calls the individual scripts for you. Non-interactive use is supported:
 .\setup\qwen_wizard.ps1 --plan mixed,turbo --yes
 ```
 
+Available plans: `env`, `comfyui`, `mixed`, `turbo`, `native`, `fix-torch`. When called with
+arguments the wizard does not pause at the end, so it can be scripted. Turbo GGUF is not part
+of the wizard — it needs its own isolated ComfyUI checkout, see `gguf/README.md`.
+
 ---
 
 ## 0. Choose a route first
@@ -28,9 +32,44 @@ then calls the individual scripts for you. Non-interactive use is supported:
 | Quantized + Turbo (recommended) | `turbo` | ~4.8 GB | 8 GB VRAM |
 | Quantized | `mixed-vram`, `mixed` | ~3.9 GB | 8 GB VRAM |
 | Full BF16 | `native` | ~30.2 GB | 16 GB VRAM or more |
-| GGUF | `gguf` | ~3.9 GB | 8 GB VRAM, slower per step |
+| GGUF (control / 4–6 GB fallback) | `gguf` | ~3.9 GB | slower and lower quality — see `gguf/README.md` |
 
 You can install more than one; they share the virtualenv and ComfyUI.
+
+### Model sources and sizes (verified against the repository APIs)
+
+Every size is an exact byte count from the ModelScope / HuggingFace file API, not an estimate.
+
+| File | Size | Source |
+|---|---|---|
+| `text_encoders/qwen3vl_8b_int8_convrot.safetensors` | 9,350,798,360 B (8.709 GiB) | ModelScope `Comfy-Org/Qwen-Image-2.1` |
+| `text_encoders/qwen3vl_8b_w4a8.safetensors` (optional) | 6,312,105,364 B (5.879 GiB) | ModelScope `Comfy-Org/Qwen-Image-2.1` |
+| `vae/qwen_image_2.1_vae_bf16.safetensors` | 675,509,688 B (0.629 GiB) | ModelScope `Comfy-Org/Qwen-Image-2.1` |
+| `diffusion_models/qwen_image_2.1_mixed_balanced.safetensors` (preferred) | 4,203,397,480 B (3.915 GiB) | **HuggingFace only**: `NidAll/Qwen-Image-2.1-Mixed-Balanced` |
+| `diffusion_models/qwen_image_2.1_int8_convrot.safetensors` (fallback) | 7,256,783,064 B (6.758 GiB) | ModelScope `Comfy-Org/Qwen-Image-2.1` |
+| `diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors` | 7,256,787,829 B (6.758 GiB) | ModelScope `Comfy-Org/Qwen-Image-2.1` |
+| `loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors` | 913,314,512 B (0.851 GiB) | ModelScope `Comfy-Org/Qwen-Image-2.1` |
+| Full native BF16 set (29 files) | 33,134,789,600 B (30.86 GiB) | ModelScope `Qwen/Qwen-Image-2.1` |
+| `qwen_image_2.1_turbo_Q4_K_M.gguf` | 4,189,346,592 B (3.90 GiB) | ModelScope `Abiray/Qwen-Image-2.1-Turbo-GGUF` |
+
+**The W4 transformer has a single source, and that is a documented risk.** The
+`NidAll/Qwen-Image-2.1-Mixed-Balanced` repository is not on ModelScope (HTTP 404), and neither
+ModelScope nor HuggingFace copies of `Comfy-Org/Qwen-Image-2.1` contain that file. So:
+
+- if the W4 file is already present locally it is **never re-downloaded** (the installer
+  matches `*mixed*balanced*` and verifies the byte count);
+- if it is missing, the installer **falls back to INT8 ConvRot (6.758 GiB) and warns
+  explicitly** — this is a deliberate 2.8 GiB difference, not a silent substitution. On an
+  8 GB card, keep the W4 file in `ComfyUI\models\diffusion_models\`;
+- HuggingFace reachability is not reliable everywhere (it was unreachable from the reference
+  machine on 2026-10-12 and reachable, at 0.37–0.58 MB/s, on 2026-10-17). If you depend on the
+  W4 file, keep your own copy.
+
+**Optional smaller text encoder (5.879 GiB).** Set
+`QWEN_TEXT_ENCODER=qwen3vl_8b_w4a8.safetensors` before running `setup_models_mixed.bat`: the
+download step and the runtime read the same variable, so both use the W4A8 encoder. It saves
+2.83 GiB of disk and RAM compared with the INT8 encoder. Its quality difference is not
+publicly measured (no LPIPS data is published for this file).
 
 ---
 

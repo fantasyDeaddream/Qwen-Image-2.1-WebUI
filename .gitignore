@@ -16,6 +16,7 @@ launcher/build/
 .qwen_env.json
 launcher_state.json
 selftest_image.json
+.qwen_tmp/
 *.pid
 
 # --- python ---

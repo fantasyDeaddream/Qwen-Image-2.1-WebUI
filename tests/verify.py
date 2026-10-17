@@ -13,12 +13,27 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SANDBOX = Path(tempfile.gettempdir()) / "qwen_verify" / "space dir" / "QwenImage"
 fails = []
+
+# This box's automation session may hand children a TEMP directory whose ACL the
+# GUI smoke script (and PowerShell itself) cannot write into; that failure looks
+# exactly like a product bug. Point TEMP/TMP at a directory we know is writable.
+import tempfile  # noqa: E402
+
+_tmp_base = Path(tempfile.gettempdir())
+try:
+    _probe_file = _tmp_base / ".qwen_write_probe"
+    _probe_file.write_text("x", encoding="utf-8")
+    _probe_file.unlink()
+except OSError:
+    _tmp_base = ROOT / ".qwen_tmp"
+    _tmp_base.mkdir(parents=True, exist_ok=True)
+os.environ["TEMP"] = str(_tmp_base)
+os.environ["TMP"] = str(_tmp_base)
 
 
 def check(label, ok, detail=""):

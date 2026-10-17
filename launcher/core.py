@@ -180,13 +180,51 @@ def _popen(args, env=None, cwd=None):
     )
 
 
-def stream(args, on_line=None, env=None, cwd=None):
-    """Run to completion, forwarding each output line. Returns the exit code."""
+# The installer currently running, so the GUI can abort it.
+_active_proc = None
+
+
+def stream(args, on_line=None, env=None, cwd=None, cancelable=False):
+    """Run to completion, forwarding each output line. Returns the exit code.
+
+    cancelable=True registers the child so cancel_install() can abort it; the
+    install actions can run for tens of minutes.
+    """
+    global _active_proc
     proc = _popen(args, env=env, cwd=cwd)
-    for line in proc.stdout:
-        if on_line:
-            on_line(line.rstrip("\r\n"))
-    return proc.wait()
+    if cancelable:
+        _active_proc = proc
+    try:
+        for line in proc.stdout:
+            if on_line:
+                on_line(line.rstrip("\r\n"))
+        return proc.wait()
+    finally:
+        if cancelable:
+            _active_proc = None
+
+
+def cancel_install() -> bool:
+    """Abort the running installer and its children. True when something was killed."""
+    global _active_proc
+    proc = _active_proc
+    if proc is None or proc.poll() is not None:
+        return False
+    try:
+        # taskkill /T is required: the PowerShell wrapper owns the python
+        # downloader, so killing only the wrapper would leave it running.
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                       capture_output=True, creationflags=CREATE_NO_WINDOW)
+    except Exception:  # noqa: BLE001
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001
+            return False
+    return True
+
+
+def install_running() -> bool:
+    return _active_proc is not None and _active_proc.poll() is None
 
 
 def capture(args, env=None):
@@ -449,7 +487,7 @@ def install(choice: Choice, install_root: str | None, on_line,
     if choice.with_gguf:
         args += ["-WithGguf"]
     on_line(f"$ {' '.join(Path(a).name if a.endswith('.ps1') else a for a in args[4:])}")
-    return stream(args, on_line=on_line, env=env)
+    return stream(args, on_line=on_line, env=env, cancelable=True)
 
 
 def install_env(install_root: str | None, on_line, state: dict | None = None,
@@ -458,7 +496,7 @@ def install_env(install_root: str | None, on_line, state: dict | None = None,
             "-Action", "env", "-Yes", "-StartDir", install_root or str(PROJECT)]
     if install_root:
         args += ["-InstallRoot", install_root]
-    return stream(args, on_line=on_line,
+    return stream(args, on_line=on_line, cancelable=True,
                   env=build_env(state=state, install_root=install_root, manual=manual))
 
 
@@ -791,6 +829,94 @@ def clear_secret(name: str) -> None:
         mem[field] = d
     save_memory(mem)
 
+
+
+
+# ---------------------------------------------------------------------------
+#  Model kits
+#
+#  A "kit" is one downloadable repository, which is what the install page shows as
+#  a card: native BF16, the quantized Comfy-Org set, and the Turbo GGUF file.
+# ---------------------------------------------------------------------------
+KIT_FOR_CHOICE = {
+    "native": "native",
+    "mixed": "mixed",
+    "mixed-vram": "mixed",
+    "turbo": "mixed",     # the Turbo int8 weights live in the Comfy-Org repo
+    "gguf": "turbo",      # only the GGUF file comes from Abiray
+}
+KIT_LABEL = {"native": "全量原生 BF16", "mixed": "量化 W4", "turbo": "Turbo GGUF"}
+
+
+def kit_of(choice_key: str) -> str:
+    return KIT_FOR_CHOICE.get(choice_key or "", "mixed")
+
+
+def model_manifest(kit: str, install_root: str | None = None, manual: dict | None = None) -> dict:
+    """Per-shard state for one kit, from the repository manifest.
+
+    Returns {} when no manifest can be built (offline, unknown kit) so the caller
+    can fall back to the coarse probe result rather than showing nothing.
+    """
+    args = [ps_exe(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(SETUP),
+            "-Action", "manifest", "-Kit", kit,
+            "-StartDir", install_root or str(PROJECT)]
+    if install_root:
+        args += ["-InstallRoot", install_root]
+    try:
+        rc, out = capture(args, env=build_env(install_root=install_root, manual=manual))
+    except Exception:  # noqa: BLE001
+        return {}
+    begin, end = out.find(BEGIN), out.find(END)
+    if begin < 0 or end < 0:
+        return {}
+    try:
+        return json.loads(out[begin + len(BEGIN):end].strip().lstrip("\ufeff"))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def uninstall_kit(kit: str, install_root: str | None = None, manual: dict | None = None,
+                  on_line=None) -> int:
+    """Delete every file belonging to one kit, partial downloads included.
+
+    The file list comes from the repository manifest rather than a hard-coded set,
+    so a half-downloaded kit is cleaned up as completely as a finished one.
+    """
+    say = on_line or (lambda _s: None)
+    man = model_manifest(kit, install_root=install_root, manual=manual)
+    if not man or not man.get("local_dir"):
+        say(f"无法确定 {KIT_LABEL.get(kit, kit)} 的安装位置（清单不可用）")
+        return 1
+    local = Path(man["local_dir"])
+    entries = []
+    for key in ("present", "damaged", "missing"):
+        entries.extend(man.get(key) or [])
+    if not entries:
+        say("清单里没有可删除的文件")
+        return 1
+
+    removed = 0
+    for e in entries:
+        p = local / str(e["path"]).replace("/", os.sep)
+        try:
+            if p.is_file():
+                p.unlink()
+                removed += 1
+        except OSError as exc:
+            say(f"  ! 无法删除 {p}：{exc}")
+    say(f"已删除 {removed} 个文件（清单共 {len(entries)} 个条目）")
+
+    for sub in ("transformer", "text_encoder", "vae", "processor", "scheduler",
+                "tokenizer", "assets", ""):
+        d = local / sub if sub else local
+        try:
+            if d.is_dir() and not any(d.iterdir()):
+                d.rmdir()
+        except OSError:
+            pass
+    say(f"{KIT_LABEL.get(kit, kit)} 已卸载")
+    return 0
 
 # ---------------------------------------------------------------------------
 #  drawing over HTTP

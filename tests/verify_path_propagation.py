@@ -1,7 +1,7 @@
 """Reproduce and verify the exact failure the user hit.
 
 Layout:
-    A = <temp>/qwen_verify_paths/exe_side/     <- the EXE side (no venv/ComfyUI)
+    A = <temp>/qwen_verify_paths/video_side/     <- the EXE side (no venv/ComfyUI)
     B = the real checkout                          <- where .venv and ComfyUI actually are
 
 Clicking "安装 量化模型" used to run qwen_setup.ps1 with no knowledge of B, so it
@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-A = Path(tempfile.gettempdir()) / "qwen_verify_paths" / "exe_side"
+A = Path(tempfile.gettempdir()) / "qwen_verify_paths" / "video_side"
 fails = []
 
 

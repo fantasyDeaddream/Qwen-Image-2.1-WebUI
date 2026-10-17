@@ -88,7 +88,7 @@ cd Qwen-Image-2.1-WebUI
 | `mixed` | 同样的 W4 权重，放置交给 ComfyUI 调度 | ~7.0 GB | 3.9 GB | 12 GB 以上更从容 |
 | `turbo` | W4 + Turbo LoRA，8 步采样 | ~7.0 GB | 4.8 GB | **推荐**，见下 |
 | `native` | 原生 BF16，走 `diffusers` | >16 GB | 30.2 GB | 画质上限最高 |
-| `gguf` | Turbo GGUF Q4_K_M，独立 ComfyUI 实例 | ~6.9 GB | 3.9 GB | 较慢；磁盘紧张时可用 |
+| `gguf` | Turbo GGUF Q4_K_M，独立 ComfyUI 实例 | ~6.9 GB | 3.9 GB | 慢 2.9× **且画质更差**——仅作 4–6 GB 兜底，见 `gguf/README.md` |
 
 ### 关于 Turbo
 
@@ -130,12 +130,19 @@ LoRA 的作用是让 8 步的画质仍然可用。
 - **前缀/KV cache 的位置对画质和耗时都没有可测影响**。
   注意：只要挂了 LoRA patch，ComfyUI 会自动关闭前缀缓存。
 
-### GGUF 每步慢得多
+### GGUF 每步更慢，而且画质更差
 
 在同一份 ComfyUI 上对比两种量化：**W4 为 1.20 s/it，GGUF 为 3.53 s/it**，慢约 2.9 倍。
 这是架构差异而非版本问题：原生 W4 路径直接派发到融合的 int8 kernel，
 而 GGUF 路径要先反量化再调用 `torch.nn.functional.linear`。
-GGUF 只在磁盘紧张或需要更小驻留占用时才有价值。
+
+它牺牲的不只是速度。unsloth 公布的 Turbo Q4_K_M LPIPS 为 **0.153**，INT8 为 **0.037**——
+大约差 **4 倍**（AlexNet，8 步）。Q5_K_M（0.074）与 Q6_K（0.055）能追回一部分，但仍落后；
+只有 Q8_0（0.036）追平 INT8，而此时文件已经不再更小。GGUF 的显存占用也与 W4 路线相当，
+既不省显存也不省磁盘。
+
+把 `gguf` 当作对照路线、以及 4–6 GB 显卡的兜底即可——6–8 GB 机器上，
+`mixed-vram` / `turbo` 严格更好。细节见 [`gguf/README.md`](gguf/README.md)。
 
 ---
 
@@ -201,6 +208,7 @@ launcher/          PyQt5 前端：检测、安装、运行、AI Agent、画廊
   core.py          发现、进程控制、密钥、HTTP 出图
   agent.py         提供方 SDK、能力探测、计划校验
   agent_panel.py   Agent 界面与结果画廊
+  tests/           离线单元测试（Agent 层，104 项，不联网、不需要 Key）
 shared/            所有策略共用的库
   QwenEnv.ps1      路径发现、环境缓存、镜像配置
   qwen_comfy.py    图构建、官方采样参数、Turbo sigma 曲线

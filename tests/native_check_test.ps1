@@ -1,5 +1,5 @@
 ﻿$ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot
+$root = (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $root 'shared\QwenEnv.ps1')
 
 $d = Join-Path $env:TEMP 'qwen_partial_fixture\Qwen-Image-2.1'

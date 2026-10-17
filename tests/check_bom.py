@@ -7,8 +7,8 @@ the BOM silently reintroduces that, and pwsh 7 does not complain -- so it ships.
 
 Run this after editing any .ps1:
 
-    python _verify/check_bom.py          # report only
-    python _verify/check_bom.py --fix    # repair
+    python tests/check_bom.py          # report only
+    python tests/check_bom.py --fix    # repair
 """
 from __future__ import annotations
 

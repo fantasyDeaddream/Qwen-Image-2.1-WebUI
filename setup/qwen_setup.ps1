@@ -18,14 +18,15 @@
 # ============================================================================
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('env', 'comfyui', 'models-mixed', 'models-native', 'fix-torch', 'status', 'probe')][string] $Action,
+    [Parameter(Mandatory)][ValidateSet('env', 'comfyui', 'models-mixed', 'models-native', 'fix-torch', 'status', 'probe', 'manifest')][string] $Action,
     [string] $StartDir = '',
     [switch] $Yes,
     [switch] $WithGguf,
     # Install into this folder instead of next to this script: .venv, ComfyUI
     # and models_cache are created directly inside it. Discovery also starts
     # here, so re-running after a partial install finds what it created.
-    [string] $InstallRoot = ''
+    [string] $InstallRoot = '',
+    [string] $Kit = 'native'
 )
 
 # --- resolve the default start directory -------------------------------------
@@ -316,7 +317,9 @@ print(f"[modelscope] done: {path}", flush=True)
 '@
     $tmp = Join-Path $env:TEMP ("ms_dl_" + [guid]::NewGuid().ToString('N') + '.py')
     Set-Content -LiteralPath $tmp -Value $script -Encoding UTF8
-    $argv = @($tmp, $Repo, $LocalDir, $Label) + $Patterns
+    # -Patterns is the explicit allow list. Callers pass only what is actually
+# missing, which is what makes a reinstall resume instead of restarting.
+$argv = @($tmp, $Repo, $LocalDir, $Label) + $Patterns
     & $VenvPython @argv
     $rc = $LASTEXITCODE
     Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
@@ -361,7 +364,7 @@ function Invoke-ModelsMixed {
     Write-QwenLog "ComfyUI: $comfy" info
 
     $specs = New-Object System.Collections.Generic.List[string]
-    $specs.Add('text_encoders/qwen3vl_8b_int8_convrot.safetensors')
+    $specs.Add("text_encoders/$($script:QwenEncoderFile)")
     $specs.Add('vae/qwen_image_2.1_vae_bf16.safetensors')
 
     # Prefer the W4 "mixed balanced" checkpoint if it is already anywhere
@@ -374,7 +377,14 @@ function Invoke-ModelsMixed {
         Write-QwenLog "已存在量化扩散模型（$([math]::Round((Get-Item -LiteralPath $localMixed).Length / 1GB, 2)) GiB），无需下载：$localMixed" ok
         Set-QwenEnvVar 'QWEN_UNET_MIXED' $localMixed
     } else {
+        # The W4 checkpoint is what the 8 GB strategies are tuned for, but its
+        # only published source is HuggingFace (NidAll/Qwen-Image-2.1-Mixed-Balanced,
+        # 4,203,397,480 B) -- ModelScope's Comfy-Org repo does not carry it.
+        # Fall back to Comfy-Org's INT8 ConvRot build (6.758 GiB) and say so: a
+        # silent swap to a model 2.8 GiB larger is how "why is mine 6.8 GiB when
+        # the docs say 3.9 GiB" confusion starts.
         $specs.Add('diffusion_models/qwen_image_2.1_int8_convrot.safetensors')
+        Write-QwenLog '未找到 W4 mixed_balanced 扩散模型；它只有 HuggingFace 源（NidAll/Qwen-Image-2.1-Mixed-Balanced，4,203,397,480 B），ModelScope 没有。本次改下 Comfy-Org 的 INT8 ConvRot（6.758 GiB）；8 GB 显存建议手动放入 W4 文件以保持 3.91 GiB 占用。' warn
     }
     if ($WithGguf) {
         $specs.Add('diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors')
@@ -465,13 +475,43 @@ function Invoke-ModelsNative {
         Write-QwenLog "附近原生权重不完整（$guess），改为下载到 $nativeDir（缺：$($chk.Missing -join '、')）" warn
     }
 
-    Write-QwenLog '未在附近（当前目录 / 子目录 / 上级目录）找到原生 BF16 权重' warn
+    Write-QwenLog '未在附近找到完整的原生 BF16 权重' warn
+
+    # Ask the repository which shards are actually here. Passing the full file list
+    # back to snapshot_download makes it re-verify everything; passing only the
+    # missing and damaged ones is a true resume.
+    $kitState = Get-QwenKitState -KitName 'native' -ComfyDir $found.ComfyDir `
+        -ModelsCache $found.ModelsCache -Root $root
+    $need = @()
+    if ($kitState -and $kitState.manifest_ok) {
+        Write-QwenLog ("分片状态：完整 {0} / 缺失 {1} / 损坏 {2}（共 {3}）" -f `
+                $kitState.present_count, $kitState.missing_count,
+            $kitState.damaged_count, $kitState.file_count) step
+        foreach ($m in $kitState.missing) { $need += $m.path }
+        foreach ($d in $kitState.damaged) {
+            $need += $d.path
+            # a short file carries the right name; removing it makes the intent
+            # explicit instead of relying on the downloader to notice
+            $p = Join-Path $kitState.local_dir ($d.path -replace '/', '\')
+            Write-QwenLog ("损坏分片 {0}：{1:N0} / {2:N0} B，将重新下载" -f $d.path, $d.have, $d.size) warn
+            Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+        }
+        if ($need.Count -eq 0 -and $kitState.missing_count -eq 0 -and $kitState.damaged_count -eq 0) {
+            Write-QwenLog '全部原生权重已完整，本次不下载任何文件。' ok
+            Set-QwenEnvVar 'QWEN_MODEL_PATH' $kitState.local_dir
+            return
+        }
+        Write-QwenLog ("本次仅下载 {0} 个缺失/损坏分片" -f $need.Count) step
+    } else {
+        Write-QwenLog '无法获取分片清单，退回全量校验下载' warn
+    }
+
     Assert-ModelScopeReady -VenvPython $vpy
     if (-not (Confirm-QwenDownload -What 'Qwen/Qwen-Image-2.1 原生 BF16 全套（transformer + Qwen3-VL 文本编码器 + VAE）' `
                 -Source $Mirrors.modelscope_repos.'Qwen/Qwen-Image-2.1' `
                 -ApproxSize '约 30 GB' -AssumeYes:$Yes)) { return }
     if (-not (Invoke-ModelScopeDownload -VenvPython $vpy -Repo 'Qwen/Qwen-Image-2.1' `
-                -LocalDir $nativeDir -Patterns @() -Label 'native-bf16')) {
+                -LocalDir $nativeDir -Patterns $need -Label 'native-bf16')) {
         throw '原生模型下载失败'
     }
     if (Test-Path -LiteralPath $nativeDir) {
@@ -541,6 +581,157 @@ function Invoke-Status {
     Write-Host "  环境缓存 : $cacheShown" -ForegroundColor Gray
 }
 
+
+# ---------------------------------------------------------------------------
+#  Shard-level model state
+#
+#  Which ModelScope repository backs which kit, and where it lands. Sizes and
+#  shard counts come from the repository API rather than a hard-coded table: the
+#  API is authoritative and does not drift.
+# ---------------------------------------------------------------------------
+
+# Optional text-encoder override. The runtime already prefers this exact name
+# when it loads the model (shared/qwen_comfy_app.py: QWEN_TEXT_ENCODER), so the
+# download side has to honour the same variable or the two halves disagree.
+# Accepts a bare file name or a full path; only the leaf name matters here.
+$script:QwenEncoderFile = 'qwen3vl_8b_int8_convrot.safetensors'
+if ($env:QWEN_TEXT_ENCODER) {
+    $leaf = [System.IO.Path]::GetFileName([string]$env:QWEN_TEXT_ENCODER)
+    if ($leaf -and $leaf -match '\.safetensors$') { $script:QwenEncoderFile = $leaf }
+}
+
+$script:QwenKits = @{
+    'native' = @{ Repo = 'Qwen/Qwen-Image-2.1';              Kind = 'cache'; Sub = 'Qwen-Image-2.1'; Label = '全量原生 BF16' }
+    'mixed'  = @{ Repo = 'Comfy-Org/Qwen-Image-2.1';         Kind = 'comfy'; Sub = 'models';          Label = '量化 W4'
+                  # the repo also holds bf16 and controlnet files this project
+                  # never downloads; counting them would inflate "missing"
+                  # NOTE: the preferred W4 diffusion checkpoint is NOT in this
+                  # repo (HF NidAll/Qwen-Image-2.1-Mixed-Balanced only); when it
+                  # is absent the installer falls back to the INT8 build below.
+                  Patterns = @("text_encoders/$($script:QwenEncoderFile)",
+                               'vae/qwen_image_2.1_vae_bf16.safetensors',
+                               'diffusion_models/qwen_image_2.1_mixed_balanced.safetensors',
+                               'diffusion_models/qwen_image_2.1_int8_convrot.safetensors',
+                               'diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors',
+                               'loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors') }
+    'turbo'  = @{ Repo = 'Abiray/Qwen-Image-2.1-Turbo-GGUF'; Kind = 'comfy'; Sub = 'models\unet';     Label = 'Turbo GGUF'
+                  Patterns = @('*Q4_K_M.gguf') }
+}
+
+function Get-QwenKitRoot {
+    param([hashtable] $Kit, [string] $ComfyDir, [string] $ModelsCache, [string] $Root)
+    # Either base can be empty when nothing is installed yet. Return $null rather
+    # than letting Join-Path throw on an empty Path argument.
+    if ($Kit.Kind -eq 'cache') {
+        $cache = $ModelsCache
+        if (-not $cache -and $Root) { $cache = Join-Path $Root 'models_cache' }
+        if (-not $cache) { return $null }
+        return (Join-Path $cache $Kit.Sub)
+    }
+    if (-not $ComfyDir) { return $null }
+    return (Join-Path $ComfyDir $Kit.Sub)
+}
+
+function Get-QwenRemoteFileList {
+    <#
+    .SYNOPSIS  Exact {path, size} for every file in a ModelScope repository.
+    .DESCRIPTION
+        Returns an empty list when the API is unreachable, so callers must treat
+        "no manifest" as "cannot tell" rather than "nothing missing".
+    #>
+    param([Parameter(Mandatory)][string] $Repo, [int] $TimeoutSec = 45)
+    $url = "https://www.modelscope.cn/api/v1/models/$Repo/repo/files?Revision=master&Recursive=true"
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $resp = Invoke-RestMethod -Uri $url -TimeoutSec $TimeoutSec -UseBasicParsing
+        # The listing also contains directory entries (Type = tree, Size = 0).
+        # Only real files carry a size, and only they can be missing on disk.
+        $files = @($resp.Data.Files | Where-Object { $_.Type -ne 'tree' -and [long]$_.Size -gt 0 })
+        if ($files.Count -eq 0) { return @() }
+        return @($files | ForEach-Object {
+            [pscustomobject]@{ Path = [string]$_.Path; Size = [long]$_.Size }
+        })
+    } catch {
+        Write-QwenLog "无法获取 $Repo 的文件清单（$($_.Exception.Message)）" warn
+        return @()
+    } finally {
+        $ErrorActionPreference = $old
+    }
+}
+
+function Get-QwenKitState {
+    <#
+    .SYNOPSIS  Per-shard presence for one model kit.
+    .DESCRIPTION
+        A file that exists but is shorter than the manifest says is reported as
+        "damaged", not "present": an interrupted transfer keeps the correct file
+        name, and counting it as complete is what makes a reinstall look like it
+        starts over from zero.
+    #>
+    param([Parameter(Mandatory)][string] $KitName, [string] $ComfyDir,
+          [string] $ModelsCache, [string] $Root)
+
+    $kit = $script:QwenKits[$KitName]
+    if (-not $kit) { return $null }
+    $local = Get-QwenKitRoot -Kit $kit -ComfyDir $ComfyDir -ModelsCache $ModelsCache -Root $Root
+    $remote = Get-QwenRemoteFileList -Repo $kit.Repo
+    if ($remote.Count -gt 0 -and $kit.Patterns) {
+        # keep only the artifacts this kit actually installs, so "missing 14"
+        # cannot be reported for a kit that needs 5 files
+        $remote = @($remote | Where-Object {
+                $p = $_.Path
+                ($kit.Patterns | Where-Object { $p -like $_ }).Count -gt 0
+            })
+    }
+
+    $present = @(); $missing = @(); $damaged = @(); $total = [long]0
+    foreach ($f in $remote) {
+        $total += $f.Size
+        $rel = $f.Path -replace '/', '\'
+        $dest = Join-Path $local $rel
+        if (-not (Test-Path -LiteralPath $dest -PathType Leaf)) {
+            $missing += [pscustomobject]@{ path = $f.Path; size = $f.Size }
+            continue
+        }
+        $have = [long](Get-Item -LiteralPath $dest).Length
+        if ($have -lt $f.Size) {
+            $damaged += [pscustomobject]@{ path = $f.Path; size = $f.Size; have = $have }
+        } else {
+            $present += [pscustomobject]@{ path = $f.Path; size = $f.Size }
+        }
+    }
+    return [pscustomobject]@{
+        kit           = $KitName
+        label         = $kit.Label
+        repo          = $kit.Repo
+        local_dir     = $local
+        manifest_ok   = ($remote.Count -gt 0)
+        total_bytes   = $total
+        file_count    = $remote.Count
+        present_count = $present.Count
+        missing_count = $missing.Count
+        damaged_count = $damaged.Count
+        missing       = @($missing)
+        damaged       = @($damaged)
+    }
+}
+
+function Invoke-Manifest {
+    <# -Action manifest: shard-level state for one kit, as JSON. #>
+    param([string] $KitName = 'native')
+    $found = Initialize-QwenEnv -StartDir $SearchDir -NeedComfy -NeedModels -Quiet
+    $root = $found.ProjectRoot
+    if (-not $root) { $root = [System.IO.Path]::GetFullPath((Join-Path $StartDir '..')) }
+    $comfy = $found.ComfyDir
+    if (-not $comfy) { $comfy = Join-Path $root 'ComfyUI' }
+    $state = Get-QwenKitState -KitName $KitName -ComfyDir $comfy -ModelsCache $found.ModelsCache -Root $root
+    if (-not $state) { throw "未知的模型套件 / unknown kit: $KitName" }
+    Write-Output '###QWEN-JSON-BEGIN###'
+    Write-Output ($state | ConvertTo-Json -Depth 6)
+    Write-Output '###QWEN-JSON-END###'
+}
+
 function Invoke-Probe {
     <#
       Machine-readable state for the GUI launcher. Writes one JSON object between
@@ -567,14 +758,14 @@ function Invoke-Probe {
     $w4 = Find-QwenComfyModelFile -StartDir $SearchDir -Folder 'diffusion_models' `
         -Pattern '*mixed*balanced*.safetensors'
 
-    $specs = @('text_encoders/qwen3vl_8b_int8_convrot.safetensors',
+    $specs = @("text_encoders/$($script:QwenEncoderFile)",
                'vae/qwen_image_2.1_vae_bf16.safetensors',
                'diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors',
                'loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors')
     if (-not $w4) { $specs += 'diffusion_models/qwen_image_2.1_int8_convrot.safetensors' }
     $plan = Resolve-QwenModelTargets -StartDir $SearchDir -ComfyDir $f.ComfyDir -Specs $specs
 
-    $encoder = $plan.Present['text_encoders/qwen3vl_8b_int8_convrot.safetensors']
+    $encoder = $plan.Present["text_encoders/$($script:QwenEncoderFile)"]
     $vaeSpec = $plan.Present['vae/qwen_image_2.1_vae_bf16.safetensors']
     $turboD  = $plan.Present['diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors']
     $turboL  = $plan.Present['loras/qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors']
@@ -591,6 +782,41 @@ function Invoke-Probe {
         }
     }
 
+    # Native BF16 lives as a whole directory rather than one file. Report it even
+    # when it is incomplete: a partially downloaded kit still occupies tens of GB
+    # and the user must be able to remove it.
+    $nativeDir = $null
+    $nativeFiles = 0
+    $nativeBytes = [long]0
+    $nativeComplete = $false
+    # Do not depend on discovery having found a models cache: a plain
+    # models_cache/Qwen-Image-2.1 tree may be all that exists, and a partial one
+    # must still be listed so it can be removed.
+    $cacheForNative = $f.ModelsCache
+    if (-not $cacheForNative) {
+        # ProjectRoot is null when the launcher runs from a bare folder. Joining
+        # it directly produced Join-Path '' 'models_cache', which throws "cannot
+        # bind argument to parameter 'Path'" and aborted the entire probe.
+        $base = [string]$f.ProjectRoot
+        if (-not $base) { $base = [string]$StartDir }
+        if ($base) {
+            $guess = Join-Path $base 'models_cache'
+            if (Test-Path -LiteralPath $guess -PathType Container) { $cacheForNative = $guess }
+        }
+    }
+    if ($cacheForNative) {
+        $cand = Join-Path $cacheForNative 'Qwen-Image-2.1'
+        if (Test-Path -LiteralPath $cand -PathType Container) {
+            $nativeDir = $cand
+            $fs = @(Get-ChildItem -LiteralPath $cand -Recurse -File -ErrorAction SilentlyContinue)
+            $nativeFiles = $fs.Count
+            $nativeBytes = [long](($fs | Measure-Object -Property Length -Sum).Sum)
+            if ($nativeFiles -gt 0) {
+                $nativeComplete = (Test-QwenNativeWeights -Dir $cand).Complete
+            }
+        }
+    }
+
     $state = [ordered]@{
         project_root = $f.ProjectRoot
         install_root = $(if ($InstallRoot) { [System.IO.Path]::GetFullPath($InstallRoot) } else { $null })
@@ -602,13 +828,22 @@ function Invoke-Probe {
             native = [bool]($f.ModelsCache -and (Test-QwenModelsCache -Path $f.ModelsCache -NeedWeights))
         }
         models       = [ordered]@{
-            encoder         = [ordered]@{ present = [bool]$encoder; path = $encoder; gib = 8.71 }
+            # gib is the real size when the file is on disk: the INT8 encoder is
+            # 8.71 GiB but the optional W4A8 one is 5.88 GiB, and the GUI should
+            # not keep claiming 8.71 after a QWEN_TEXT_ENCODER override.
+            encoder         = [ordered]@{ present = [bool]$encoder; path = $encoder
+                                           gib = $(if ($encoder) { [math]::Round((Get-Item -LiteralPath $encoder).Length / 1GB, 2) } elseif ($script:QwenEncoderFile -match 'w4a8') { 5.88 } else { 8.71 }) }
             vae             = [ordered]@{ present = [bool]$vaeSpec; path = $vaeSpec; gib = 0.63 }
             diffusion       = [ordered]@{ present = [bool]$diffusion; path = $diffusion; gib = 6.76
                                           kind = $(if ($w4) { 'w4' } elseif ($int8) { 'int8' } else { 'missing' }) }
             turbo_diffusion = [ordered]@{ present = [bool]$turboD; path = $turboD; gib = 6.76 }
             turbo_lora      = [ordered]@{ present = [bool]$turboL; path = $turboL; gib = 0.85 }
             turbo_gguf      = [ordered]@{ present = [bool]$gguf; path = $gguf; gib = 3.90 }
+            # `present` means "any files are on disk", so a partial download can
+            # still be cleaned up; `complete` says whether it is usable.
+            native          = [ordered]@{ present = [bool]$nativeDir; path = $nativeDir
+                                          complete = $nativeComplete; files = $nativeFiles
+                                          bytes = $nativeBytes; gib = 30.2 }
         }
     }
     $json = $state | ConvertTo-Json -Depth 6
@@ -637,4 +872,5 @@ switch ($Action) {
     'fix-torch' { Invoke-FixTorch }
     'status'    { Invoke-Status }
     'probe'     { Invoke-Probe }
+    'manifest'  { Invoke-Manifest -KitName $Kit }
 }

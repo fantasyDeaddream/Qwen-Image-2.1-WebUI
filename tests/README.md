@@ -4,14 +4,26 @@ Ad-hoc checks for the things that are easy to get wrong in this project. They ar
 unit-test suite — they exercise the real PowerShell scripts and the real frozen
 executable, which is where the interesting failures live.
 
-Run them from the repository root with the project virtualenv:
+The pure-logic unit tests for the AI agent layer are separate and live in
+`launcher/tests/` (104 checks, no network, no API key needed):
+
+```powershell
+.\.venv\Scripts\python.exe launcher\tests\test_agent_logic.py   # 74 checks
+.\.venv\Scripts\python.exe launcher\tests\test_agent_panel.py   # 30 checks, offscreen Qt
+```
+
+Run the scripts below from the repository root with the project virtualenv:
 
 ```powershell
 cd <repo>
 .\.venv\Scripts\python.exe tests\check_bom.py
 .\.venv\Scripts\python.exe tests\verify.py
 .\.venv\Scripts\python.exe tests\verify_path_propagation.py
+.\.venv\Scripts\python.exe tests\run_exe_selftest.py --exe <path to QwenImageLauncher.exe>
 ```
+
+`run_exe_selftest.py` needs a built (or downloaded) `QwenImageLauncher.exe`; the other
+scripts only need the repository and its virtualenv.
 
 ## Why these exist
 
@@ -35,6 +47,7 @@ A clean Windows install only has 5.1. Every row above has caused a real failure 
 | `check_bom.py` | Every `.ps1` that contains non-ASCII must carry a UTF-8 BOM. `--fix` repairs them. Run this after editing any PowerShell file — an editor that drops the BOM silently breaks 5.1. |
 | `verify.py` | Parses all six `.ps1` files under both PowerShell versions; runs `qwen_setup.ps1 -Action probe` and `-Action status` from a path containing a space with **no** `-StartDir`; calls `core.probe()`; launches the GUI offscreen under both versions. |
 | `verify_path_propagation.py` | Builds an A/B layout — the executable on one side, the virtualenv and ComfyUI on the other — and asserts that manually chosen paths reach the install steps instead of only the probe. |
+| `run_exe_selftest.py` | Copies the frozen executable to a scratch folder, runs `--selftest-image` with a hard timeout, and asserts `all_ok` plus a clean exit. `--chinese` repeats it under a path with spaces and CJK characters; `--gui-alive` also checks that the GUI event loop boots. |
 | `native_check_test.ps1` | Builds a deliberately partial native-weight tree (one shard present, index promises three, two components missing) and asserts `Test-QwenNativeWeights` rejects it while accepting a complete one. |
 | `parse_and_table.ps1` | Parses every `.ps1` under the running PowerShell version and prints the artifact size table, so you can confirm each rule still matches its filename pattern. |
 | `make_partial_fixture.py` | Creates the partial tree used by `native_check_test.ps1`. |
