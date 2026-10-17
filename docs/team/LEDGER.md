@@ -86,6 +86,10 @@
   相对链接 0 断链；发布副本内跑通 `tests/check_bom.py`（6 个 ps1 BOM OK）+ `launcher/tests` 74+30 项单测。
 - **不在本版**（用户已批准）：S3 的 W4A8 实测与 12–16 GB 分档 → v1.2.0；W4 单源归档 → S2 下一轮。
 - **阻塞**：无。下一轮起点：S3 开工 + S2 归档/EXE 策略确定后，按同样流程同步 → v1.2.0。
+- **追加（2026-10-17 12:25，用户要求）**：`.gitignore` 的「large binaries」段补 `_archive/`、`*.safetensors`、
+  `*.gguf`、`*.bin`、`*.part`，防止下一轮 S2 归档的 3.9 GB W4 权重被 `git add -A` 扫入仓库
+  （GitHub 单文件上限 100 MB）。提交 **`fd1beb5`** 已推送 `main`；已用 `git check-ignore` 验证
+  `_archive/models/*.safetensors` 等被忽略、正常源码文件未被误伤。v1.1.0 release/tag（`d78dea7`）不受影响。
 
 ---
 
