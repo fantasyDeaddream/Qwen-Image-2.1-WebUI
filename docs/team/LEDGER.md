@@ -76,7 +76,8 @@
 - **资产**：`QwenImageLauncher.exe` **45,547,059 B**，SHA256
   `2EEB86FD5CBBCDF781EC1C31C559D003C436757ABA00367B070F92F79FDCB264`（GitHub 资产 digest 与下载后本地复核一致）
   + `QwenImageLauncher.exe.sha256`（66 B）。
-- **仓库**：public、默认分支 `main`，remote `main` = `d78dea7`，**74** 个跟踪文件（v1.0.0 为 62）。
+- **仓库**：public、默认分支 `main`；release commit **`d78dea7`**（tag `v1.1.0`），其后 `main` 追加了
+  本次账本更新提交；**74** 个跟踪文件（v1.0.0 为 62）。
 - **本次收录**：S2 的最新代码（`shared/QwenEnv.ps1`、`setup/qwen_setup.ps1`、`launcher/{app,core,agent}.py`，
   含路径修复）、S4 的 `launcher/tests/`（104 项离线单测）、`tests/` 由 `_verify/` 重新清洗（新增
   `run_exe_selftest.py`）、`docs/` 9 个文件（已清除本机绝对路径）公开收录、`gguf/README.md` 降级重写、
