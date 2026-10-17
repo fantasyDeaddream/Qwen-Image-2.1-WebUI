@@ -69,6 +69,23 @@
 - **阻塞**：无；S2、S4 未启动，S3 就绪未开工，源树暂无待发布改动，暂无可同步内容。
 - **下一步**：① 跟进 S2 用最新代码重建 EXE → 复制到 `_publish\release\` 并生成 SHA256；② S3/S4 完成后同步源码（先跑脱敏扫描 + 人工核 `git status`）并更新文档；③ 打 `v1.1.0`、发 release；④ 收尾时再更新本节。
 
+### [S5] 2026-10-17 12:19 — v1.1.0 已发布
+
+- **版本**：annotated tag `v1.1.0`（tag 对象 `9969322` → commit **`d78dea7`**），`main` 已推送。
+  Release：https://github.com/fantasyDeaddream/Qwen-Image-2.1-WebUI/releases/tag/v1.1.0
+- **资产**：`QwenImageLauncher.exe` **45,547,059 B**，SHA256
+  `2EEB86FD5CBBCDF781EC1C31C559D003C436757ABA00367B070F92F79FDCB264`（GitHub 资产 digest 与下载后本地复核一致）
+  + `QwenImageLauncher.exe.sha256`（66 B）。
+- **仓库**：public、默认分支 `main`，remote `main` = `d78dea7`，**74** 个跟踪文件（v1.0.0 为 62）。
+- **本次收录**：S2 的最新代码（`shared/QwenEnv.ps1`、`setup/qwen_setup.ps1`、`launcher/{app,core,agent}.py`，
+  含路径修复）、S4 的 `launcher/tests/`（104 项离线单测）、`tests/` 由 `_verify/` 重新清洗（新增
+  `run_exe_selftest.py`）、`docs/` 9 个文件（已清除本机绝对路径）公开收录、`gguf/README.md` 降级重写、
+  `README(.zh-CN).md` 与 `setup/README.md` 同步（模型来源/体积表、W4 单源风险、W4A8 可选编码器、GGUF 画质代价）。
+- **发布前检查**：脱敏扫描通过（无本机绝对路径 / API Key / 真实邮箱）、`git status` 人工核对 29 个变更文件、
+  相对链接 0 断链；发布副本内跑通 `tests/check_bom.py`（6 个 ps1 BOM OK）+ `launcher/tests` 74+30 项单测。
+- **不在本版**（用户已批准）：S3 的 W4A8 实测与 12–16 GB 分档 → v1.2.0；W4 单源归档 → S2 下一轮。
+- **阻塞**：无。下一轮起点：S3 开工 + S2 归档/EXE 策略确定后，按同样流程同步 → v1.2.0。
+
 ---
 
 ## 请求
@@ -128,6 +145,32 @@ Comfy-Org 同仓库有 `qwen3vl_8b_w4a8.safetensors`，**5.879 GiB**（ModelScop
    **显式告警**并回退 Comfy-Org INT8 ConvRot（6.758 GiB，比 W4 大 2.8 GiB）。详见 `setup\README.md`
    「模型来源与体积」。若要更强保障，可行的下一步是 HF 断点续传下载器（0.37–0.58 MB/s，约 2–3 小时），
    本轮按「不发布新版本」的口径没有开工。
+
+### [S5] 2026-10-17 12:19 → S2
+**本轮发布发现两处需补登/跟进，请处理。**
+
+1. **路径修复的签名变化未登记契约**：`launcher/app.py` / `launcher/core.py` 在源码树有改动
+   （新增 `core.path_overrides()`；`build_env` / `probe` / `install` / `install_env` /
+   `install_comfyui` / `launch` / `stop` 新增 `state`、`manual` 参数），但「契约」区没有对应条目。
+   用户已按「S2 路径修复」计入 v1.1.0，我按最新源码收录（commit `d78dea7`）。请补一条契约，
+   避免 S3/S4 按旧签名调用。
+2. **launcher 里的 GGUF 推荐文案与新文档口径冲突**（用户决策 3「GGUF 降级」）：`launcher/core.py`
+   第 466 行在显存偏小时提示「GGUF Q4_K_M 在显存上更宽松」，`launcher/app.py` 第 978 行只写
+   「慢约 2.9 倍」。公开文档已改为「慢 2.9× **且 LPIPS 0.153 vs 0.037（约 4 倍，unsloth 8 步）**，
+   仅作对照 / 4–6 GB 兜底」。本轮按决策只改文档、未动代码；请下轮评估是否把 UI 文案改成
+   不暗示 GGUF 更适合 8 GB 的措辞。
+3. 本轮发布取的就是 `launcher\dist\QwenImageLauncher.exe`（12:05:59 构建，45,547,059 B，
+   SHA256 `2EEB86…`），与你账本一致，不需要再重建。
+
+### [S5] 2026-10-17 12:19 → S3
+**GGUF 降级措辞只在发布副本，源树 `gguf/README.md` 需你同步同口径（该目录你拥有，我没擅自改）。**
+
+按用户批准决策 3，公开文档已改成：Q4_K_M LPIPS **0.153** vs INT8 **0.037**（约 4 倍，unsloth
+AlexNet 8 步）、本机实测慢 **2.9×**、定位为「对照 / 4–6 GB 极端小显存兜底」，不再暗示它是
+6–8 GB 的可行选项（`gguf/README.md`、根 README 中英版、`setup/README.md`）。源树 `gguf/README.md`
+（dev 版）仍是旧措辞，请下轮在源树同步，避免与公开文档矛盾；若你在 v1.2.0 做 12–16 GB 分档时
+认为 GGUF 的推荐位需要调整，也可一并说明。另：`_verify\gui_shots.py`、`_verify\fix_*.py` 属一次性
+脚本，按发布排除规则未收录（正常）。
 
 ---
 
