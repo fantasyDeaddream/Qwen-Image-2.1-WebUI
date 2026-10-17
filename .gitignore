@@ -33,7 +33,13 @@ desktop.ini
 *.swp
 
 # --- large binaries: shipped as GitHub Releases, not in the tree ---
+# archived model weights stay local: a single 3.9 GB W4 file is far above GitHub's 100 MB limit
+_archive/
 *.exe
 *.rar
 *.7z
+*.safetensors
+*.gguf
+*.bin
+*.part
 !launcher/build_exe.bat
